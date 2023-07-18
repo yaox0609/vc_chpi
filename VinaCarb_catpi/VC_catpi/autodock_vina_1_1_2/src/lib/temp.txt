@@ -1,0 +1,144 @@
+	void DFSVisit(model& m, atomv& atoms, std::map<atom_vc*, bool>& atom_visited_map, std::map<atom_vc*, atom_vc*> atom_parent_map, atom_vc* atom, int& counter, std::map<atom_vc*, atom_vc*> src_dest_map){
+    		atom_visited_map[atom] = true;
+		VINA_FOR_IN(i, atom->bonds){
+			const bond_vc& b = atom->bonds[i];
+			atom_vc& neighbor = m.get_atom(b.connected_atom_index);
+			atom_vc* n_ptr = &(neighbor);
+
+			//Check if neighbor is in the atoms to be searched, only continue searching if this is the case.
+			//If ligand is covalently bonded to receptor, use this to block searching to the other molecule. 
+    			if (atom_visited_map.find(n_ptr) != atom_visited_map.end()){
+				//If not visited
+               			if(!atom_visited_map[n_ptr]){
+               				atom_parent_map[n_ptr] = atom;
+              				DFSVisit(m, atoms, atom_visited_map, atom_parent_map, neighbor, counter, src_dest_map);
+                		}
+                		if(atom_visited_map[n_ptr]){
+                    			atom_vc* parent = atom_parent_map[atom];
+					//making sure we are not tracking back to the previous atom which is the parent of neigbor (current atom)
+                    			if(n_ptr != parent){
+                        			counter++;
+                        			std::stringstream key;
+                        			key << neighbor->GetId() << "-" << atom->GetId();
+                        			src_dest_map[n_ptr] = atom;
+                    			}
+                		}
+        		}
+		}
+	}
+
+	std::vector<aptrv> DetectCyclesByDFS(model& m, atomv& atoms){
+		int counter = 0;
+            
+		//Status code: unvisited = 0, visited = 1;
+		//const int fake_parent_ptr = 0;
+
+		std::map<atom_vc*, bool> atom_visited_map;
+		std::map<atom_vc*, atom_vc*> atom_parent_map;
+		std::map<atom_vc*, atom_vc*> src_dest_map; 
+
+    		aptrv cycle;
+		std::vector<aptrv> cycles;
+
+		VINA_FOR_IN (i, atoms){
+			atom_vc* aptr = &(atoms[i]);
+        		atom_visited_map[aptr] = false;
+        		atom_parent_map[aptr] = NULL;
+    		}       
+		VINA_FOR_IN (i, atoms){
+			atom_vc& atom = atoms[i];
+        		if(!atom_visited_map[aptr]){
+            			DFSVisit(m, atoms, atom_visited_map, atom_parent_map, atom, counter, src_dest_map);
+        		}
+    		}
+
+		int max_while_iteration_allowed = 100;
+		for(std::map<atom_vc*, atom_vc*>::iterator it = src_dest_map.begin(); it != src_dest_map.end(); it++){
+			atom_vc* cycle_start = it->first;
+        		atom_vc* cycle_end = it->second;
+        		cycle.clear();
+
+			int num_iter = 0;
+			cycle.push_back(&(cycle_end));
+			atom_vc* current_atom = &(cycle_end);
+			bool suspicious_loop = false;
+
+			while (current_atom != cycle_start && num_iter <= max_while_iteration_allowed){
+				atom_vc* parent_atom = atom_parent_map[current_atom];
+				cycle.push_back(parent_atom);
+				current_atom = parent_atom;
+				num_iter++;
+
+				if (num_iter > max_while_iteration_allowed){
+					suspicious_loop = true;
+					break; //This is redundant given the while condition above, but I really want to be safe.
+				}
+			}
+			
+			if (suspicious_loop){
+				std::cout << "Warning, encounter a loop > " << max_while_iteration_allowed << " atoms." << std::endl;
+				std::cout << "This loop will be filtered out. You should really check what's going on." << std::endl;
+				cycle.clear();
+				continue;
+			}
+
+			cycles.push_back(cycle).
+
+    		}
+
+    		return cycles;
+		
+	}
+
+	std::vector<atomv> DetectAromaticCycles(model& m, atomv& atoms){
+		std::vector<atomv> aromatic_cycles;
+
+		std::vector<atomv> cycles = DetectCyclesByDFS(m, atoms);
+
+		VINA_FOR_IN(i, cycles){
+			atomv& ring_atoms = cycles[i];
+			VINA_FOR_IN(j, ring_atoms){
+				atom_vc& atom = ring_atoms[j];
+				//As long as there is at least one aromatic carbon in this cycle, it counts as an aromatic cycle. Should be good in most cases. 
+				if (atom.xs == XS_TYPE_C_A_P || atom.xs == XS_TYPE_C_A_H){
+					aromatic_cycles.push_back(cycles[i]);
+				}
+				break;
+			}
+        	}
+
+		//Check if a cycle is a subset of another cycle. For example, a phenyl(PHE) may be detected as a subset of an indole(TRP).
+		//If this case, filter out this smaller cycle. 
+		std::vector<atomv> aromatic_cycles_non_duplicate; //Check if a cycle is a subset of another cycle.
+		VINA_FOR_IN(i, aromatic_cycles){
+        		atomv& this_cycle = aromatic_cycles[i];
+       	 		bool this_cycle_is_subset = false;
+
+			VINA_FOR_IN(j, aromatic_cycles){
+            			if (j != i){
+                			atomv& another_cycle = aromatic_cycles[j];
+                			bool another_cycle_contains_this_cycle = true;
+
+					VINA_FOR_IN(k, this_cycle){
+                    				atom_vc& this_cycle_atom = this_cycle[k];
+
+                    				if (!atom_in_ring(this_cycle_atom, another_cycle)){
+                        				another_cycle_contains_this_cycle = false;
+                        				break;
+                    				}
+                			}
+
+                			if (another_cycle_contains_this_cycle){
+                    				this_cycle_is_subset = true;
+                   	 			break;
+                			}
+            			}
+        		}		
+
+        		if (!this_cycle_is_subset){
+            			aromatic_cycles_non_duplicate.push_back(this_cycle);
+        		}
+    		}
+    		return aromatic_cycles_non_duplicate;
+
+	}
